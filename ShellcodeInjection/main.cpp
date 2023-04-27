@@ -14,18 +14,8 @@ struct SC_PARAM
 	char Caption[20]{};
 };
 
-void __fastcall shellcode(BYTE* SelfAddr)
-{
-	SC_PARAM* ScParam = (SC_PARAM*)(SelfAddr + 0x20);
-
-	ScParam->MsgBox(NULL, ScParam->Text, ScParam->Caption, MB_OK);
-}
-
 int main(int argc, char* argv[])
 {
-#ifdef _DEBUG
-	printf("Project must be compiled on release mode.\n");
-#else
 	// Checking for arguments.
 	if (argc != 2)
 	{
@@ -51,20 +41,26 @@ int main(int argc, char* argv[])
 	}
 	printf("[*] Retrieved handle for target process, 0x%X\n", HandleToULong(hProcess));
 
-	// Allocating a little memory for our shellcode function + variables. 0x100 will be enough for it.
-	PVOID ShellcodeMemory = VirtualAllocEx(hProcess, NULL, 0x100, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+#ifdef _WIN64
+	BYTE ShellcodeBytes[] = "\x48\x8B\xC1\x4C\x8D\x41\x1C\x48\x8D\x51\x08\x45\x33\xC9\x33\xC9\x48\xFF\x20";
+#else
+	BYTE ShellcodeBytes[] = "\x6A\x00\x8D\x41\x18\x50\x8D\x41\x04\x50\x8B\x01\x6A\x00\xFF\xD0\xC3";
+#endif
+
+	// Allocating memory for our shellcode function + variables.
+	PVOID ShellcodeMemory = VirtualAllocEx(hProcess, NULL, sizeof(ShellcodeBytes) + sizeof(SC_PARAM), MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
 	if (!ShellcodeMemory)
 	{
 		printf("[!] VirtualAllocEx failed. Err code: 0x%X\n", GetLastError());
 		return 0;
 	}
-	printf("[*] 0x100 bytes of memory allocated inside target process.\n");
+	printf("[*] %i bytes of memory allocated inside target process.\n", sizeof(ShellcodeBytes) + sizeof(SC_PARAM));
 
 	do
 	{
 		// Writing our shellcode into the allocated memory, since this memory is in the target process we must call WriteProcessMemory.
 		SIZE_T NumberOfBytesWritten = 0;
-		if (!WriteProcessMemory(hProcess, ShellcodeMemory, shellcode, 0x20, &NumberOfBytesWritten))
+		if (!WriteProcessMemory(hProcess, ShellcodeMemory, ShellcodeBytes, sizeof(ShellcodeBytes), &NumberOfBytesWritten))
 		{
 			printf("[!] WriteProcessMemory failed. Err code: 0x%X\n", GetLastError());
 			break;
@@ -103,7 +99,7 @@ int main(int argc, char* argv[])
 		memcpy(ScParam.Caption, Caption, strlen(Caption) + 1);
 
 		// Writing variables just after the shellcode function so we can access them inside the target process.
-		if (!WriteProcessMemory(hProcess, (BYTE*)ShellcodeMemory + 0x20, &ScParam, 0x80, &NumberOfBytesWritten))
+		if (!WriteProcessMemory(hProcess, (BYTE*)ShellcodeMemory + sizeof(ShellcodeBytes), &ScParam, sizeof(SC_PARAM), &NumberOfBytesWritten))
 		{
 			printf("[!] WriteProcessMemory failed. Err code: 0x%X\n", GetLastError());
 			break;
@@ -111,7 +107,7 @@ int main(int argc, char* argv[])
 		printf("[*] shellcode variables written into the allocated memory.\n");
 
 		// Creating a remote thread inside the target process which calls our shellcode (well not our's anymore actually).
-		HANDLE hThread = CreateRemoteThread(hProcess, NULL, NULL, (LPTHREAD_START_ROUTINE)ShellcodeMemory, ShellcodeMemory, NULL, NULL);
+		HANDLE hThread = CreateRemoteThread(hProcess, NULL, NULL, (LPTHREAD_START_ROUTINE)ShellcodeMemory, (BYTE*)ShellcodeMemory + sizeof(ShellcodeBytes), NULL, NULL);
 		if (!hThread)
 		{
 			printf("[!] CreateRemoteThread failed. Err code: 0x%X\n", GetLastError());
@@ -141,5 +137,4 @@ int main(int argc, char* argv[])
 
 	CloseHandle(hProcess);
 	printf("[*] Process handle released.\n");
-#endif
 }
